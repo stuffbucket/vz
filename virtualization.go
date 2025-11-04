@@ -206,7 +206,6 @@ func (v *VirtualMachine) USBControllers() []*USBController {
 	return usbControllers
 }
 
-
 //export changeStateOnObserver
 func changeStateOnObserver(newStateRaw C.int, cgoHandleUintptr C.uintptr_t) {
 	stateHandle := cgo.Handle(cgoHandleUintptr)
@@ -430,6 +429,18 @@ func (v *VirtualMachine) StartGraphicApplication(width, height float64, opts ...
 		windowTitle.CString(),
 		C.bool(defaultOpts.enableController),
 	)
+	return nil
+}
+
+// BringWindowToFront brings the GUI window to the foreground and activates the application.
+// This only works if StartGraphicApplication has been called to create the GUI window.
+//
+// This is only supported on macOS 12 and newer, error will be returned on older versions.
+func (v *VirtualMachine) BringWindowToFront() error {
+	if err := macOSAvailable(12); err != nil {
+		return err
+	}
+	C.bringVirtualMachineWindowToFront()
 	return nil
 }
 

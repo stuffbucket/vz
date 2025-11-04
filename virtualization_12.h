@@ -46,3 +46,4 @@ void setAudioDevicesVZVirtualMachineConfiguration(void *config,
     void *audioDevices);
 
 void startVirtualMachineWindow(void *machine, void *queue, double width, double height, const char *title, bool enableController);
+void bringVirtualMachineWindowToFront();

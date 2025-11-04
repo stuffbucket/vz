@@ -323,6 +323,7 @@
     }
 }
 
+static NSString *const CaptureInputToolbarIdentifier = @"CaptureInput";
 static NSString *const ZoomToolbarIdentifier = @"Zoom";
 static NSString *const PauseToolbarIdentifier = @"Pause";
 static NSString *const PlayToolbarIdentifier = @"Play";
@@ -334,6 +335,7 @@ static NSString *const Space2ToolbarIdentifier = @"Space2";
 {
     NSMutableArray<NSToolbarItemIdentifier> *toolbarItems = [NSMutableArray array];
     if (_enableController) {
+        [toolbarItems addObject:CaptureInputToolbarIdentifier];
         if ([self canPauseVirtualMachine]) {
             [toolbarItems addObject:PauseToolbarIdentifier];
         }
@@ -499,6 +501,7 @@ static NSString *const Space2ToolbarIdentifier = @"Space2";
 - (NSArray<NSToolbarItemIdentifier> *)toolbarAllowedItemIdentifiers:(NSToolbar *)toolbar
 {
     return @[
+        CaptureInputToolbarIdentifier,
         ZoomToolbarIdentifier,
         PlayToolbarIdentifier,
         PauseToolbarIdentifier,
@@ -514,7 +517,18 @@ static NSString *const Space2ToolbarIdentifier = @"Space2";
 {
     NSToolbarItem *item = [[[NSToolbarItem alloc] initWithItemIdentifier:itemIdentifier] autorelease];
 
-    if ([itemIdentifier isEqualToString:PauseToolbarIdentifier]) {
+    if ([itemIdentifier isEqualToString:CaptureInputToolbarIdentifier]) {
+        NSButton *captureButton = [[[NSButton alloc] initWithFrame:NSMakeRect(0, 0, 40, 40)] autorelease];
+        captureButton.bezelStyle = NSBezelStyleTexturedRounded;
+        [captureButton setImage:[NSImage imageWithSystemSymbolName:@"keyboard" accessibilityDescription:nil]];
+        [captureButton setTarget:self];
+        [captureButton setAction:@selector(toggleCaptureInput:)];
+        [captureButton setButtonType:NSButtonTypeToggle];
+        [captureButton setState:_virtualMachineView.capturesSystemKeys ? NSControlStateValueOn : NSControlStateValueOff];
+        [item setView:captureButton];
+        [item setLabel:@"Capture"];
+        [item setToolTip:@"Toggle Input Capture"];
+    } else if ([itemIdentifier isEqualToString:PauseToolbarIdentifier]) {
         [item setImage:[NSImage imageWithSystemSymbolName:@"pause.fill" accessibilityDescription:nil]];
         [item setLabel:@"Pause"];
         [item setTarget:self];
@@ -567,6 +581,12 @@ static NSString *const Space2ToolbarIdentifier = @"Space2";
 }
 
 #pragma mark - Button Actions
+
+- (void)toggleCaptureInput:(id)sender
+{
+    NSButton *button = (NSButton *)sender;
+    _virtualMachineView.capturesSystemKeys = (button.state == NSControlStateValueOn);
+}
 
 - (void)pauseButtonClicked:(id)sender
 {
@@ -975,5 +995,13 @@ static NSString *const Space2ToolbarIdentifier = @"Space2";
 {
     AboutPanel *aboutPanel = [[[AboutPanel alloc] init] autorelease];
     [aboutPanel makeKeyAndOrderFront:nil];
+}
+
+- (void)bringWindowToFront
+{
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [NSApp activateIgnoringOtherApps:YES];
+        [_window makeKeyAndOrderFront:nil];
+    });
 }
 @end

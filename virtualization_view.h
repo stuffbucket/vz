@@ -32,4 +32,5 @@ API_AVAILABLE(macos(12.0))
                           windowHeight:(CGFloat)windowHeight
                            windowTitle:(NSString *)windowTitle
                       enableController:(BOOL)enableController;
+- (void)bringWindowToFront;
 @end

@@ -367,3 +367,15 @@ void startVirtualMachineWindow(void *machine, void *queue, double width, double 
     }
     RAISE_UNSUPPORTED_MACOS_EXCEPTION();
 }
+
+void bringVirtualMachineWindowToFront()
+{
+    if (@available(macOS 12, *)) {
+        @autoreleasepool {
+            AppDelegate *appDelegate = (AppDelegate *)NSApp.delegate;
+            if (appDelegate) {
+                [appDelegate bringWindowToFront];
+            }
+        }
+    }
+}
