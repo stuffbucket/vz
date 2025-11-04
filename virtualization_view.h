@@ -31,6 +31,9 @@ API_AVAILABLE(macos(12.0))
                            windowWidth:(CGFloat)windowWidth
                           windowHeight:(CGFloat)windowHeight
                            windowTitle:(NSString *)windowTitle
-                      enableController:(BOOL)enableController;
+                      enableController:(BOOL)enableController
+                   windowClosedHandle:(uintptr_t)windowClosedHandle
+                 confirmStopOnClose:(BOOL)confirmStopOnClose;
 - (void)bringWindowToFront;
+- (NSWindow *)getWindow;
 @end

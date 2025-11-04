@@ -1,0 +1,11 @@
+/* Title for stop VM confirmation dialog */
+"STOP_VM_TITLE" = "停止虚拟机?";
+
+/* Message warning about stopping VM */
+"STOP_VM_MESSAGE" = "关闭窗口将停止虚拟机。如果客户操作系统未正确关闭,未保存的数据可能会丢失。";
+
+/* Stop button for stop VM dialog */
+"STOP_VM_STOP" = "停止";
+
+/* Cancel button for stop VM dialog */
+"STOP_VM_CANCEL" = "取消";

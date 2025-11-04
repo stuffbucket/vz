@@ -5,6 +5,7 @@
 //
 
 #import "virtualization_view.h"
+#import "virtualization_11.h"
 
 @implementation VZApplication
 
@@ -179,6 +180,10 @@
     NSTimer *_scrollTimer;
     NSPoint _scrollDelta;
     id _mouseMovedMonitor;
+    // CGO handle for window close callback
+    uintptr_t _windowClosedHandle;
+    // Window close behavior settings
+    BOOL _confirmStopOnClose;
 }
 
 - (instancetype)initWithVirtualMachine:(VZVirtualMachine *)virtualMachine
@@ -187,10 +192,14 @@
                           windowHeight:(CGFloat)windowHeight
                            windowTitle:(NSString *)windowTitle
                       enableController:(BOOL)enableController
+                   windowClosedHandle:(uintptr_t)windowClosedHandle
+                 confirmStopOnClose:(BOOL)confirmStopOnClose
 {
     self = [super init];
     _virtualMachine = virtualMachine;
     [_virtualMachine setDelegate:self];
+    _windowClosedHandle = windowClosedHandle;
+    _confirmStopOnClose = confirmStopOnClose;
 
     // Setup virtual machine view configs
     VZVirtualMachineView *view = [[[VZVirtualMachineView alloc] init] autorelease];
@@ -397,9 +406,47 @@ static NSString *const Space2ToolbarIdentifier = @"Space2";
     [NSApp activateIgnoringOtherApps:YES];
 }
 
+- (BOOL)windowShouldClose:(NSWindow *)sender
+{
+    if (!_confirmStopOnClose) {
+        return YES;
+    }
+    
+    NSAlert *alert = [[[NSAlert alloc] init] autorelease];
+    [alert setIcon:[NSImage imageNamed:NSImageNameCaution]];
+    [alert setMessageText:NSLocalizedString(@"STOP_VM_TITLE", @"Title for stop VM confirmation")];
+    [alert setInformativeText:NSLocalizedString(@"STOP_VM_MESSAGE", @"Message warning about stopping VM")];
+    [alert addButtonWithTitle:NSLocalizedString(@"STOP_VM_CANCEL", @"Cancel button for stop VM dialog")];
+    [alert addButtonWithTitle:NSLocalizedString(@"STOP_VM_STOP", @"Stop button for stop VM dialog")];
+    [alert setAlertStyle:NSAlertStyleCritical];
+    
+    // Default to Cancel button (first button, activated by ESC)
+    NSModalResponse response = [alert runModal];
+    // NSAlertSecondButtonReturn means Stop button was clicked
+    return response == NSAlertSecondButtonReturn;
+}
+
 - (void)windowWillClose:(NSNotification *)notification
 {
-    [NSApp performSelectorOnMainThread:@selector(terminate:) withObject:self waitUntilDone:NO];
+    // Notify Go that window is closing
+    if (_windowClosedHandle != 0) {
+        @try {
+            notifyWindowClosed(_windowClosedHandle);
+        } @catch (NSException *exception) {
+            NSLog(@"Exception in notifyWindowClosed: %@", exception);
+        }
+    }
+    
+    // Always stop VM when window closes (standard macOS behavior)
+    dispatch_sync(_queue, ^{
+        if (_virtualMachine.canStop) {
+            [_virtualMachine stopWithCompletionHandler:^(NSError *error) {
+                if (error) {
+                    NSLog(@"Error stopping VM on window close: %@", error);
+                }
+            }];
+        }
+    });
 }
 
 - (void)setupGraphicWindow
@@ -1003,5 +1050,10 @@ static NSString *const Space2ToolbarIdentifier = @"Space2";
         [NSApp activateIgnoringOtherApps:YES];
         [_window makeKeyAndOrderFront:nil];
     });
+}
+
+- (NSWindow *)getWindow
+{
+    return _window;
 }
 @end

@@ -1,0 +1,11 @@
+/* Title for stop VM confirmation dialog */
+"STOP_VM_TITLE" = "वर्चुअल मशीन बंद करें?";
+
+/* Message warning about stopping VM */
+"STOP_VM_MESSAGE" = "विंडो बंद करने से वर्चुअल मशीन बंद हो जाएगी। यदि गेस्ट ऑपरेटिंग सिस्टम को ठीक से बंद नहीं किया गया है तो असहेजे डेटा खो सकता है।";
+
+/* Stop button for stop VM dialog */
+"STOP_VM_STOP" = "बंद करें";
+
+/* Cancel button for stop VM dialog */
+"STOP_VM_CANCEL" = "रद्द करें";

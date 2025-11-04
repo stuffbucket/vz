@@ -1,0 +1,11 @@
+/* Title for stop VM confirmation dialog */
+"STOP_VM_TITLE" = "가상 머신을 중지하시겠습니까?";
+
+/* Message warning about stopping VM */
+"STOP_VM_MESSAGE" = "창을 닫으면 가상 머신이 중지됩니다. 게스트 OS가 올바르게 종료되지 않은 경우 저장되지 않은 데이터가 손실될 수 있습니다.";
+
+/* Stop button for stop VM dialog */
+"STOP_VM_STOP" = "중지";
+
+/* Cancel button for stop VM dialog */
+"STOP_VM_CANCEL" = "취소";

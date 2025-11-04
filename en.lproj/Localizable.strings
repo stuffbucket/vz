@@ -1,0 +1,11 @@
+/* Title for stop VM confirmation dialog */
+"STOP_VM_TITLE" = "Stop Virtual Machine?";
+
+/* Message warning about stopping VM */
+"STOP_VM_MESSAGE" = "Closing the window will stop the virtual machine. Unsaved data may be lost if the guest OS has not been shut down properly.";
+
+/* Stop button for stop VM dialog */
+"STOP_VM_STOP" = "Stop";
+
+/* Cancel button for stop VM dialog */
+"STOP_VM_CANCEL" = "Cancel";

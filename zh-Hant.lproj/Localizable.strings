@@ -1,0 +1,11 @@
+/* Title for stop VM confirmation dialog */
+"STOP_VM_TITLE" = "停止虛擬機?";
+
+/* Message warning about stopping VM */
+"STOP_VM_MESSAGE" = "關閉視窗將停止虛擬機。如果客體作業系統未正確關閉,未儲存的資料可能會遺失。";
+
+/* Stop button for stop VM dialog */
+"STOP_VM_STOP" = "停止";
+
+/* Cancel button for stop VM dialog */
+"STOP_VM_CANCEL" = "取消";

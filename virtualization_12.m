@@ -343,7 +343,7 @@ void *newVZUSBKeyboardConfiguration()
     RAISE_UNSUPPORTED_MACOS_EXCEPTION();
 }
 
-void startVirtualMachineWindow(void *machine, void *queue, double width, double height, const char *title, bool enableController)
+void startVirtualMachineWindow(void *machine, void *queue, double width, double height, const char *title, bool enableController, uintptr_t windowClosedHandle, bool confirmStopOnClose)
 {
     // Create a shared app instance.
     // This will initialize the global variable
@@ -358,7 +358,9 @@ void startVirtualMachineWindow(void *machine, void *queue, double width, double 
                            windowWidth:(CGFloat)width
                           windowHeight:(CGFloat)height
                            windowTitle:windowTitle
-                      enableController:enableController] autorelease];
+                      enableController:enableController
+                   windowClosedHandle:windowClosedHandle
+                 confirmStopOnClose:confirmStopOnClose] autorelease];
 
             NSApp.delegate = appDelegate;
             [NSApp run];
@@ -366,6 +368,38 @@ void startVirtualMachineWindow(void *machine, void *queue, double width, double 
         }
     }
     RAISE_UNSUPPORTED_MACOS_EXCEPTION();
+}
+
+bool hasVirtualMachineWindow()
+{
+    if (@available(macOS 12, *)) {
+        @autoreleasepool {
+            AppDelegate *appDelegate = (AppDelegate *)NSApp.delegate;
+            if (appDelegate != nil && [appDelegate conformsToProtocol:@protocol(NSApplicationDelegate)]) {
+                NSWindow *window = [appDelegate getWindow];
+                return window != nil && [window isVisible];
+            }
+        }
+    }
+    return false;
+}
+
+void showVirtualMachineWindow()
+{
+    if (@available(macOS 12, *)) {
+        @autoreleasepool {
+            AppDelegate *appDelegate = (AppDelegate *)NSApp.delegate;
+            if (appDelegate) {
+                NSWindow *window = [appDelegate getWindow];
+                if (window) {
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        [NSApp activateIgnoringOtherApps:YES];
+                        [window makeKeyAndOrderFront:nil];
+                    });
+                }
+            }
+        }
+    }
 }
 
 void bringVirtualMachineWindowToFront()
