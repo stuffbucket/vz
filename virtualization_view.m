@@ -567,11 +567,13 @@ static NSString *const Space2ToolbarIdentifier = @"Space2";
     if ([itemIdentifier isEqualToString:CaptureInputToolbarIdentifier]) {
         NSButton *captureButton = [[[NSButton alloc] initWithFrame:NSMakeRect(0, 0, 40, 40)] autorelease];
         captureButton.bezelStyle = NSBezelStyleTexturedRounded;
-        [captureButton setImage:[NSImage imageWithSystemSymbolName:@"keyboard" accessibilityDescription:nil]];
+        BOOL isCapturing = _virtualMachineView.capturesSystemKeys;
+        NSString *iconName = isCapturing ? @"keyboard.fill" : @"keyboard";
+        [captureButton setImage:[NSImage imageWithSystemSymbolName:iconName accessibilityDescription:nil]];
         [captureButton setTarget:self];
         [captureButton setAction:@selector(toggleCaptureInput:)];
         [captureButton setButtonType:NSButtonTypeToggle];
-        [captureButton setState:_virtualMachineView.capturesSystemKeys ? NSControlStateValueOn : NSControlStateValueOff];
+        [captureButton setState:isCapturing ? NSControlStateValueOn : NSControlStateValueOff];
         [item setView:captureButton];
         [item setLabel:@"Capture"];
         [item setToolTip:@"Toggle Input Capture"];
@@ -632,7 +634,12 @@ static NSString *const Space2ToolbarIdentifier = @"Space2";
 - (void)toggleCaptureInput:(id)sender
 {
     NSButton *button = (NSButton *)sender;
-    _virtualMachineView.capturesSystemKeys = (button.state == NSControlStateValueOn);
+    BOOL isCapturing = (button.state == NSControlStateValueOn);
+    _virtualMachineView.capturesSystemKeys = isCapturing;
+    
+    // Update icon to match state: filled when capturing, outline when not
+    NSString *iconName = isCapturing ? @"keyboard.fill" : @"keyboard";
+    [button setImage:[NSImage imageWithSystemSymbolName:iconName accessibilityDescription:nil]];
 }
 
 - (void)pauseButtonClicked:(id)sender
