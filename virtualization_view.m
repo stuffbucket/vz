@@ -414,18 +414,10 @@ static NSString *const Space2ToolbarIdentifier = @"Space2";
     
     NSAlert *alert = [[[NSAlert alloc] init] autorelease];
     [alert setIcon:[NSImage imageNamed:NSImageNameCaution]];
-    
-    // Use bundle localization if available, otherwise fall back to English
-    NSBundle *bundle = [NSBundle bundleForClass:[self class]];
-    NSString *title = [bundle localizedStringForKey:@"STOP_VM_TITLE" value:@"Stop Virtual Machine?" table:nil];
-    NSString *message = [bundle localizedStringForKey:@"STOP_VM_MESSAGE" value:@"Closing the window will stop the virtual machine. Unsaved data may be lost if the guest OS has not been shut down properly." table:nil];
-    NSString *cancelButton = [bundle localizedStringForKey:@"STOP_VM_CANCEL" value:@"Cancel" table:nil];
-    NSString *stopButton = [bundle localizedStringForKey:@"STOP_VM_STOP" value:@"Stop" table:nil];
-    
-    [alert setMessageText:title];
-    [alert setInformativeText:message];
-    [alert addButtonWithTitle:cancelButton];
-    [alert addButtonWithTitle:stopButton];
+    [alert setMessageText:@"Stop Virtual Machine?"];
+    [alert setInformativeText:@"Closing this window will also stop the virtual machine. If you want to keep it running, please minimize the window instead."];
+    [alert addButtonWithTitle:@"Cancel"];
+    [alert addButtonWithTitle:@"Stop"];
     [alert setAlertStyle:NSAlertStyleCritical];
     
     // Default to Cancel button (first button, activated by ESC)
