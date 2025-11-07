@@ -100,8 +100,39 @@ Or use the `-AppleLanguages` argument:
 
 ## Implementation Notes
 
-- Uses `NSLocalizedString` macro in Objective-C code
+- Uses `NSBundle bundleForClass:` to locate localization strings
+- Falls back to English strings if localization files are not found
+- Localization files must be included in your application bundle to work
 - Follows Apple Human Interface Guidelines for dialog text
 - Button order follows macOS conventions (Cancel is default/leftmost)
 - Alert style is `NSAlertStyleCritical` for destructive actions
-- Fallback to English if translation is missing
+
+## Using Localizations in Your Application
+
+For localizations to work, your Go application must be packaged as a macOS application bundle with the `.lproj` directories included. 
+
+### Option 1: Application Bundle
+
+Create an application bundle structure:
+
+```
+YourApp.app/
+  Contents/
+    MacOS/
+      yourapp           (your Go binary)
+    Resources/
+      en.lproj/
+        Localizable.strings
+      es.lproj/
+        Localizable.strings
+      (other .lproj directories...)
+    Info.plist
+```
+
+### Option 2: Embedded Resources
+
+If you're distributing as a standalone binary, the code will fall back to built-in English strings. The localization files are optional for development but recommended for production applications.
+
+### Building with Code Signing
+
+When building your application, ensure proper code signing and entitlements are applied. See the example applications in `example/` for reference implementations.
