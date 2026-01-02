@@ -7,6 +7,7 @@ package vz
 # include "virtualization_12.h"
 # include "virtualization_13.h"
 # include "virtualization_15.h"
+# include "virtualization_default_app.h"
 */
 import "C"
 import (
@@ -102,11 +103,6 @@ type VirtualMachine struct {
 
 	config *VirtualMachineConfiguration
 
-	// hasGUIWindow tracks whether StartGraphicApplication has been called
-	hasGUIWindow bool
-	// windowClosedHandle is CGO handle for window close callbacks
-	windowClosedHandle cgo.Handle
-
 	mu sync.RWMutex
 }
 
@@ -169,12 +165,6 @@ func NewVirtualMachine(config *VirtualMachineConfiguration) (*VirtualMachine, er
 
 func (v *VirtualMachine) finalize() {
 	v.finalizeOnce.Do(func() {
-		v.mu.Lock()
-		if v.windowClosedHandle != 0 {
-			v.windowClosedHandle.Delete()
-			v.windowClosedHandle = 0
-		}
-		v.mu.Unlock()
 		objc.ReleaseDispatch(v.dispatchQueue)
 		objc.Release(v)
 	})
@@ -228,23 +218,6 @@ func changeStateOnObserver(newStateRaw C.int, cgoHandleUintptr C.uintptr_t) {
 	v.state = newState
 	v.stateNotify.In() <- newState
 	v.mu.Unlock()
-}
-
-//export notifyWindowClosed
-func notifyWindowClosed(cgoHandleUintptr C.uintptr_t) {
-	if cgoHandleUintptr == 0 {
-		return
-	}
-	// Don't delete the handle - it's managed by VirtualMachine.finalize()
-	handle := cgo.Handle(cgoHandleUintptr)
-	vm, ok := handle.Value().(*VirtualMachine)
-	if !ok {
-		return
-	}
-	// Use defer to ensure unlock happens even if panic occurs
-	vm.mu.Lock()
-	defer vm.mu.Unlock()
-	vm.hasGUIWindow = false
 }
 
 // State represents execution state of the virtual machine.
@@ -443,91 +416,93 @@ func WithConfirmStopOnClose(enable bool) StartGraphicApplicationOption {
 	}
 }
 
-// StartGraphicApplication starts an application to display graphics of the VM.
+// CreateWindow creates and displays a graphics window for the VM without blocking.
+// Call RunApplication() to start the event loop, or use this in an app that
+// already has an event loop running.
 //
-// You must to call runtime.LockOSThread before calling this method.
+// You must call runtime.LockOSThread before calling this method.
 //
 // This is only supported on macOS 12 and newer, error will be returned on older versions.
-func (v *VirtualMachine) StartGraphicApplication(width, height float64, opts ...StartGraphicApplicationOption) error {
+func (v *VirtualMachine) CreateWindow(width, height float64, opts ...StartGraphicApplicationOption) error {
 	if err := macOSAvailable(12); err != nil {
 		return err
 	}
 	defaultOpts := &startGraphicApplicationOptions{
-		confirmStopOnClose: true, // Default to showing confirmation
+		confirmStopOnClose: true,
 	}
 	for _, opt := range opts {
 		if err := opt(defaultOpts); err != nil {
 			return err
 		}
 	}
+
 	windowTitle := charWithGoString(defaultOpts.title)
 	defer windowTitle.Free()
 
-	v.mu.Lock()
-	v.hasGUIWindow = true
-	// Create handle for window close callback
-	v.windowClosedHandle = cgo.NewHandle(v)
-	v.mu.Unlock()
-
-	C.startVirtualMachineWindow(
+	windowController := C.createVirtualMachineWindow(
 		objc.Ptr(v),
 		v.dispatchQueue,
 		C.double(width),
 		C.double(height),
 		windowTitle.CString(),
 		C.bool(defaultOpts.enableController),
-		C.uintptr_t(v.windowClosedHandle),
 		C.bool(defaultOpts.confirmStopOnClose),
 	)
+	_ = windowController // window is shown during creation
 	return nil
 }
 
-// BringWindowToFront brings the GUI window to the foreground and activates the application.
-// This only works if StartGraphicApplication has been called to create the GUI window.
-// Returns an error if the GUI window does not exist.
+// CreateVMView creates a VZVirtualMachineView for the virtual machine and returns
+// a pointer to the native view. This is intended for custom window handlers that
+// need direct access to the view without the default window management.
+//
+// The returned pointer is an NSView* (specifically VZVirtualMachineView*) that
+// the consumer can embed in their own window hierarchy.
+//
+// The consumer is responsible for:
+// - Creating and managing the window
+// - Setting up the view in their window's content view
+// - Handling window lifecycle and events
+// - Running their own event loop (or calling vz.RunApplication())
 //
 // This is only supported on macOS 12 and newer, error will be returned on older versions.
-func (v *VirtualMachine) BringWindowToFront() error {
+func (v *VirtualMachine) CreateVMView() (unsafe.Pointer, error) {
+	if err := macOSAvailable(12); err != nil {
+		return nil, err
+	}
+	view := C.createVirtualMachineView(objc.Ptr(v))
+	if view == nil {
+		return nil, fmt.Errorf("failed to create virtual machine view")
+	}
+	return unsafe.Pointer(view), nil
+}
+
+// RunApplication starts the AppKit event loop.
+// This function blocks until the application terminates.
+// Call this after CreateWindow() to process window events.
+//
+// You must call runtime.LockOSThread before calling this method.
+//
+// This is only supported on macOS 12 and newer, error will be returned on older versions.
+func RunApplication() error {
 	if err := macOSAvailable(12); err != nil {
 		return err
 	}
-	v.mu.RLock()
-	hasGUI := v.hasGUIWindow
-	v.mu.RUnlock()
-	if !hasGUI {
-		return fmt.Errorf("GUI window does not exist; call StartGraphicApplication first")
-	}
-	if !bool(C.hasVirtualMachineWindow()) {
-		return fmt.Errorf("GUI window is not available")
-	}
-	C.bringVirtualMachineWindowToFront()
+	C.runApplication()
 	return nil
 }
 
-// ShowWindow shows the GUI window if it was previously hidden/closed.
-// Unlike BringWindowToFront, this works even if the window is currently hidden.
-// Returns an error if StartGraphicApplication was never called.
+// StartGraphicApplication starts an application to display graphics of the VM.
+// This is equivalent to calling CreateWindow() followed by RunApplication().
+//
+// You must to call runtime.LockOSThread before calling this method.
 //
 // This is only supported on macOS 12 and newer, error will be returned on older versions.
-func (v *VirtualMachine) ShowWindow() error {
-	if err := macOSAvailable(12); err != nil {
+func (v *VirtualMachine) StartGraphicApplication(width, height float64, opts ...StartGraphicApplicationOption) error {
+	if err := v.CreateWindow(width, height, opts...); err != nil {
 		return err
 	}
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	if v.windowClosedHandle == 0 {
-		return fmt.Errorf("GUI was never initialized; call StartGraphicApplication first")
-	}
-	v.hasGUIWindow = true
-	C.showVirtualMachineWindow()
-	return nil
-}
-
-// HasGUIWindow returns true if StartGraphicApplication has been called and the GUI window exists.
-func (v *VirtualMachine) HasGUIWindow() bool {
-	v.mu.RLock()
-	defer v.mu.RUnlock()
-	return v.hasGUIWindow && bool(C.hasVirtualMachineWindow())
+	return RunApplication()
 }
 
 // DisconnectedError represents an error that occurs when a VM’s network attachment is disconnected

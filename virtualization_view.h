@@ -1,6 +1,9 @@
 //
 //  virtualization_view.h
 //
+//  Core application infrastructure for VM graphics.
+//  This file contains only the minimal components needed by all paths.
+//
 //  Created by codehex.
 //
 
@@ -11,29 +14,9 @@
 #import <Cocoa/Cocoa.h>
 #import <Virtualization/Virtualization.h>
 
+// VZApplication provides a custom event loop for VM graphics applications.
+// It allows programmatic termination via the shouldKeepRunning flag.
 @interface VZApplication : NSApplication {
     bool shouldKeepRunning;
 }
-@end
-
-@interface AboutViewController : NSViewController
-- (instancetype)init;
-@end
-
-@interface AboutPanel : NSPanel
-- (instancetype)init;
-@end
-
-API_AVAILABLE(macos(12.0))
-@interface AppDelegate : NSObject <NSApplicationDelegate, NSWindowDelegate, VZVirtualMachineDelegate, NSToolbarDelegate>
-- (instancetype)initWithVirtualMachine:(VZVirtualMachine *)virtualMachine
-                                 queue:(dispatch_queue_t)queue
-                           windowWidth:(CGFloat)windowWidth
-                          windowHeight:(CGFloat)windowHeight
-                           windowTitle:(NSString *)windowTitle
-                      enableController:(BOOL)enableController
-                   windowClosedHandle:(uintptr_t)windowClosedHandle
-                 confirmStopOnClose:(BOOL)confirmStopOnClose;
-- (void)bringWindowToFront;
-- (NSWindow *)getWindow;
 @end

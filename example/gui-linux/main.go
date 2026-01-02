@@ -1,105 +1,513 @@
 package main
 
+/*
+#cgo darwin CFLAGS: -x objective-c
+#cgo darwin LDFLAGS: -framework Cocoa
+#include <stdlib.h>
+
+// Defined in app_menu.m
+void setupAppFileMenu(void);
+*/
+import "C"
 import (
-	"context"
 	"errors"
-	"flag"
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"runtime"
-	"time"
+	"strings"
+	"sync"
 
 	"github.com/Code-Hex/vz/v3"
 )
 
-var install bool
+const isoEnvVar = "ISO"
 
-func init() {
-	flag.BoolVar(&install, "install", false, "run command as install mode")
+// Channels for GUI menu events
+var (
+	createVMCh = make(chan [2]string, 10) // receives (isoPath, vmName)
+	startVMCh  = make(chan [2]string, 10) // receives (vmName, isoPath)
+)
+
+// runningVMs tracks which VMs are currently running to prevent double-starts
+var runningVMs = struct {
+	sync.RWMutex
+	names map[string]bool
+}{names: make(map[string]bool)}
+
+func markRunning(name string) bool {
+	runningVMs.Lock()
+	defer runningVMs.Unlock()
+	if runningVMs.names[name] {
+		return false // already running
+	}
+	runningVMs.names[name] = true
+	return true
+}
+
+func markStopped(name string) {
+	runningVMs.Lock()
+	defer runningVMs.Unlock()
+	delete(runningVMs.names, name)
+}
+
+func isRunning(name string) bool {
+	runningVMs.RLock()
+	defer runningVMs.RUnlock()
+	return runningVMs.names[name]
+}
+
+// CGO exports for Obj-C menu callbacks
+
+//export getVMListCallback
+func getVMListCallback() *C.char {
+	reg, err := LoadRegistry()
+	if err != nil {
+		return C.CString("")
+	}
+	var names []string
+	for _, vm := range reg.List() {
+		names = append(names, vm.Name)
+	}
+	result := strings.Join(names, "\n")
+	return C.CString(result)
+}
+
+//export isVMRunningCallback
+func isVMRunningCallback(vmNameCString *C.char) C.int {
+	name := C.GoString(vmNameCString)
+	if isRunning(name) {
+		return 1
+	}
+	return 0
+}
+
+//export startVMGoCallback
+func startVMGoCallback(vmNameCString *C.char, isoPathCString *C.char) {
+	data := [2]string{C.GoString(vmNameCString), C.GoString(isoPathCString)}
+	select {
+	case startVMCh <- data:
+	default:
+	}
+}
+
+//export newVMFromURLGoCallback
+func newVMFromURLGoCallback(isoPathCString *C.char, vmNameCString *C.char) {
+	data := [2]string{C.GoString(isoPathCString), C.GoString(vmNameCString)}
+	select {
+	case createVMCh <- data:
+	default:
+	}
 }
 
 func main() {
-	flag.Parse()
-	if err := run(context.Background()); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to run: %v", err)
+	if err := run(); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func run(ctx context.Context) error {
-	installerISOPath := os.Getenv("INSTALLER_ISO_PATH")
+func usage() {
+	fmt.Fprintf(os.Stderr, `Usage: %s [command] [options]
 
-	if install {
-		if installerISOPath == "" {
-			return fmt.Errorf("must be specified INSTALLER_ISO_PATH env")
+Commands:
+  (none)                        Open GUI with no VMs started
+  start [name] [-iso path]      Start a VM (default: "default")
+  create [name] -iso path       Create and start a new VM (default: "default")
+  list                          List all VMs
+  delete <name> [--force]       Delete a VM (--force stops if running)
+
+Environment:
+  ISO                           Default ISO path for start/create
+
+Legacy:
+  -install                      Start 'default' VM with INSTALLER_ISO_PATH env
+
+Examples:
+  %[1]s                              # Open GUI
+  %[1]s start                        # Start 'default' VM
+  %[1]s start myvm                   # Start existing VM
+  %[1]s start myvm -iso boot.iso     # Start VM with ISO attached
+  %[1]s create -iso boot.iso         # Create 'default' VM with ISO
+  %[1]s create myvm -iso boot.iso    # Create new VM with ISO
+  ISO=boot.iso %[1]s create myvm     # Create using env var
+  %[1]s list                         # List all VMs
+  %[1]s delete myvm                  # Delete a VM
+  %[1]s delete myvm --force          # Stop and delete a running VM
+`, os.Args[0])
+}
+
+// getISOPath returns ISO path from args or environment
+func getISOPath(args []string) string {
+	for i, arg := range args {
+		if arg == "-iso" && i+1 < len(args) {
+			return args[i+1]
 		}
-		if err := CreateVMBundle(); err != nil {
+	}
+	return os.Getenv(isoEnvVar)
+}
+
+// getNameArg returns the name argument (first non-flag arg after command)
+func getNameArg(args []string) string {
+	for _, arg := range args {
+		if !strings.HasPrefix(arg, "-") {
+			return arg
+		}
+	}
+	return ""
+}
+
+func run() error {
+	registry, err := LoadRegistry()
+	if err != nil {
+		return fmt.Errorf("failed to load registry: %w", err)
+	}
+
+	// No args = open GUI with no VMs
+	if len(os.Args) < 2 {
+		return runGUIOnly(registry)
+	}
+
+	cmd := os.Args[1]
+	args := os.Args[2:] // args after command
+
+	// Legacy -install flag
+	if cmd == "-install" {
+		envISO := os.Getenv("INSTALLER_ISO_PATH")
+		if envISO == "" {
+			return fmt.Errorf("must specify INSTALLER_ISO_PATH env with -install")
+		}
+		return runStartCommand(registry, DefaultVMName, envISO)
+	}
+
+	switch cmd {
+	case "start":
+		name := getNameArg(args)
+		if name == "" {
+			name = DefaultVMName
+		}
+		iso := getISOPath(args)
+		return runStartCommand(registry, name, iso)
+
+	case "create":
+		name := getNameArg(args)
+		if name == "" {
+			name = DefaultVMName
+		}
+		iso := getISOPath(args)
+		if iso == "" {
+			return fmt.Errorf("ISO required: use -iso <path> or set ISO env var")
+		}
+		return runCreateCommand(registry, name, iso)
+
+	case "list":
+		return runListCommand(registry)
+
+	case "delete":
+		name := getNameArg(args)
+		if name == "" {
+			return fmt.Errorf("usage: %s delete <name> [--force]", os.Args[0])
+		}
+		force := false
+		for _, arg := range args {
+			if arg == "--force" || arg == "-f" {
+				force = true
+			}
+		}
+		return runDeleteCommand(registry, name, force)
+
+	case "-h", "--help", "help":
+		usage()
+		return nil
+
+	default:
+		usage()
+		return fmt.Errorf("unknown command: %s", cmd)
+	}
+}
+
+func runGUIOnly(registry *Registry) error {
+	log.Printf("Starting GUI (no VM)")
+	return runEventLoop(registry, nil)
+}
+
+func runStartCommand(registry *Registry, name, isoPath string) error {
+	entry := registry.Find(name)
+	if entry == nil {
+		return fmt.Errorf("VM %q not found. Use 'create' to create it", name)
+	}
+
+	if isRunning(name) {
+		return fmt.Errorf("VM %q is already running", name)
+	}
+
+	bundle := registry.BundleFor(entry)
+
+	// Expand ~ in ISO path
+	if strings.HasPrefix(isoPath, "~/") {
+		home, _ := os.UserHomeDir()
+		isoPath = filepath.Join(home, isoPath[2:])
+	}
+
+	// Use provided ISO, or fall back to stored ISO if disk is empty
+	effectiveISO := isoPath
+	if effectiveISO == "" && entry.ISOPath != "" && !bundle.HasBootableDisk() {
+		effectiveISO = entry.ISOPath
+		log.Printf("Using stored ISO: %s", effectiveISO)
+	}
+
+	return runEventLoop(registry, &vmStartRequest{
+		entry:   entry,
+		bundle:  bundle,
+		isoPath: effectiveISO,
+	})
+}
+
+func runCreateCommand(registry *Registry, name, isoPath string) error {
+	if registry.Exists(name) {
+		return fmt.Errorf("VM %q already exists", name)
+	}
+
+	// Expand ~ in ISO path
+	if strings.HasPrefix(isoPath, "~/") {
+		home, _ := os.UserHomeDir()
+		isoPath = filepath.Join(home, isoPath[2:])
+	}
+
+	// Verify ISO exists
+	if _, err := os.Stat(isoPath); os.IsNotExist(err) {
+		return fmt.Errorf("ISO not found: %s", isoPath)
+	}
+
+	entry, err := registry.Add(name, isoPath)
+	if err != nil {
+		return fmt.Errorf("failed to create VM: %w", err)
+	}
+
+	bundle := registry.BundleFor(entry)
+	if err := bundle.Create(); err != nil {
+		return fmt.Errorf("failed to create bundle: %w", err)
+	}
+
+	fmt.Printf("Created VM %q\n", name)
+	return runEventLoop(registry, &vmStartRequest{
+		entry:   entry,
+		bundle:  bundle,
+		isoPath: isoPath,
+	})
+}
+
+func runListCommand(registry *Registry) error {
+	vms := registry.List()
+	if len(vms) == 0 {
+		fmt.Println("No VMs configured.")
+		return nil
+	}
+
+	fmt.Println("Virtual Machines:")
+	for _, vm := range vms {
+		bundle := registry.BundleFor(&vm)
+		status := "ready"
+		if !bundle.HasBootableDisk() && vm.ISOPath != "" {
+			status = "needs boot media"
+		}
+		iso := ""
+		if vm.ISOPath != "" {
+			iso = fmt.Sprintf(" (iso: %s)", vm.ISOPath)
+		}
+		fmt.Printf("  %s [%s]%s\n", vm.Name, status, iso)
+	}
+	return nil
+}
+
+func runDeleteCommand(registry *Registry, name string, force bool) error {
+	if !registry.Exists(name) {
+		return fmt.Errorf("VM %q not found", name)
+	}
+
+	if isRunning(name) {
+		if !force {
+			return fmt.Errorf("VM %q is running. Use --force to stop and delete", name)
+		}
+		// TODO: actually stop the VM
+		// For now, just warn - we can't stop VMs from CLI in this process
+		return fmt.Errorf("VM %q is running in another process. Stop it first or use the GUI", name)
+	}
+
+	fmt.Printf("Delete VM %q and all its data? (yes/no): ", name)
+	var confirm string
+	fmt.Scanln(&confirm)
+	if confirm != "yes" {
+		fmt.Println("Cancelled.")
+		return nil
+	}
+
+	if err := registry.Remove(name, true); err != nil {
+		return fmt.Errorf("failed to delete VM: %w", err)
+	}
+	fmt.Printf("Deleted VM %q\n", name)
+	return nil
+}
+
+// vmStartRequest holds info for starting a VM on event loop start
+type vmStartRequest struct {
+	entry   *VMEntry
+	bundle  *Bundle
+	isoPath string
+}
+
+// runEventLoop sets up providers and runs the AppKit event loop
+func runEventLoop(registry *Registry, initialVM *vmStartRequest) error {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	// Start listening for GUI menu events
+	go handleCreateVMRequests()
+	go handleStartVMRequests()
+
+	// Start initial VM if requested
+	if initialVM != nil {
+		needsInstall := initialVM.isoPath != ""
+		log.Printf("Starting VM %q (needsInstall=%v)", initialVM.entry.Name, needsInstall)
+		if err := createAndShowVM(initialVM.isoPath, needsInstall, initialVM.entry.Name, initialVM.bundle); err != nil {
 			return err
 		}
 	}
 
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
+	// Set up app-specific File menu (must happen after RunApplication initializes the app)
+	// We do this in a goroutine that waits for the main menu to exist
+	go func() {
+		// Small delay to ensure app is initialized
+		runtime.LockOSThread()
+		C.setupAppFileMenu()
+	}()
 
-	config, err := createVirtualMachineConfig(installerISOPath, install)
+	log.Printf("Running application event loop...")
+	return vz.RunApplication()
+}
+
+func handleStartVMRequests() {
+	for data := range startVMCh {
+		vmName, isoPath := data[0], data[1]
+		log.Printf("Start VM request: name=%s iso=%s", vmName, isoPath)
+
+		registry, err := LoadRegistry()
+		if err != nil {
+			log.Printf("Failed to reload registry: %v", err)
+			continue
+		}
+
+		entry := registry.Find(vmName)
+		if entry == nil {
+			log.Printf("VM %q not found", vmName)
+			continue
+		}
+
+		if isRunning(vmName) {
+			log.Printf("VM %q is already running", vmName)
+			continue
+		}
+
+		bundle := registry.BundleFor(entry)
+
+		// Use provided ISO, or fall back to stored ISO if disk is empty
+		effectiveISO := isoPath
+		if effectiveISO == "" && entry.ISOPath != "" && !bundle.HasBootableDisk() {
+			effectiveISO = entry.ISOPath
+			log.Printf("Using stored ISO: %s", effectiveISO)
+		}
+		needsInstall := effectiveISO != ""
+
+		if err := createAndShowVM(effectiveISO, needsInstall, entry.Name, bundle); err != nil {
+			log.Printf("Failed to start VM %q: %v", vmName, err)
+		}
+	}
+}
+
+func handleCreateVMRequests() {
+	for data := range createVMCh {
+		isoPath, vmName := data[0], data[1]
+		log.Printf("Create VM request: name=%s iso=%s", vmName, isoPath)
+
+		registry, err := LoadRegistry()
+		if err != nil {
+			log.Printf("Failed to reload registry: %v", err)
+			continue
+		}
+
+		// Check if VM already exists
+		if registry.Exists(vmName) {
+			log.Printf("VM %q already exists in registry", vmName)
+			continue
+		}
+
+		// Check if already running (shouldn't be possible but be safe)
+		if isRunning(vmName) {
+			log.Printf("VM %q is already running", vmName)
+			continue
+		}
+
+		entry, err := registry.Add(vmName, isoPath)
+		if err != nil {
+			log.Printf("Failed to create VM entry: %v", err)
+			continue
+		}
+
+		bundle := registry.BundleFor(entry)
+		if err := bundle.Create(); err != nil {
+			log.Printf("Failed to create bundle: %v", err)
+			continue
+		}
+
+		if err := createAndShowVM(isoPath, true, entry.Name, bundle); err != nil {
+			log.Printf("Failed to create VM from %s: %v", isoPath, err)
+		}
+	}
+}
+
+func createAndShowVM(isoPath string, needsInstall bool, title string, bundle *Bundle) error {
+	// Mark VM as running (prevent double-start)
+	if !markRunning(title) {
+		return fmt.Errorf("VM %q is already running", title)
+	}
+
+	config, err := createVirtualMachineConfig(isoPath, needsInstall, bundle)
 	if err != nil {
-		return err
+		markStopped(title)
+		return fmt.Errorf("failed to create VM config: %w", err)
 	}
 
 	vm, err := vz.NewVirtualMachine(config)
 	if err != nil {
-		return err
+		markStopped(title)
+		return fmt.Errorf("failed to create VM: %w", err)
 	}
 
 	if err := vm.Start(); err != nil {
-		return err
+		markStopped(title)
+		return fmt.Errorf("failed to start VM: %w", err)
 	}
 
-	errCh := make(chan error, 1)
-
+	// Monitor VM state in background
 	go func() {
-		for {
-			select {
-			case newState := <-vm.StateChangedNotify():
-				if newState == vz.VirtualMachineStateRunning {
-					log.Println("start VM is running")
-				}
-				if newState == vz.VirtualMachineStateStopped || newState == vz.VirtualMachineStateStopping {
-					log.Println("stopped state")
-					errCh <- nil
-					return
-				}
-			case err := <-errCh:
-				errCh <- fmt.Errorf("failed to start vm: %w", err)
+		for state := range vm.StateChangedNotify() {
+			log.Printf("[%s] VM state: %v", title, state)
+			if state == vz.VirtualMachineStateStopped {
+				markStopped(title)
 				return
 			}
 		}
 	}()
 
-	// cleanup is this function is useful when finished graphic application.
-	cleanup := func() {
-		for i := 1; vm.CanRequestStop(); i++ {
-			result, err := vm.RequestStop()
-			log.Printf("sent stop request(%d): %t, %v", i, result, err)
-			time.Sleep(time.Second * 3)
-			if i > 3 {
-				log.Println("call stop")
-				if err := vm.Stop(); err != nil {
-					log.Println("stop with error", err)
-				}
-			}
-		}
-		log.Println("finished cleanup")
+	// Create window (non-blocking, window shows immediately)
+	if err := vm.CreateWindow(960, 600, vz.WithWindowTitle(title), vz.WithController(true)); err != nil {
+		markStopped(title)
+		return fmt.Errorf("failed to create window: %w", err)
 	}
 
-	runtime.LockOSThread()
-	vm.StartGraphicApplication(960, 600, vz.WithWindowTitle("Linux"), vz.WithController(true))
-	runtime.UnlockOSThread()
-
-	cleanup()
-
-	return <-errCh
+	log.Printf("[%s] VM started", title)
+	return nil
 }
 
 // Create an empty disk image for the virtual machine.
@@ -131,7 +539,6 @@ func computeCPUCount() uint {
 	if virtualCPUCount <= 1 {
 		virtualCPUCount = 1
 	}
-	// TODO(codehex): use generics function when deprecated Go 1.17
 	maxAllowed := vz.VirtualMachineConfigurationMaximumAllowedCPUCount()
 	if virtualCPUCount > maxAllowed {
 		virtualCPUCount = maxAllowed
@@ -144,7 +551,6 @@ func computeCPUCount() uint {
 }
 
 func computeMemorySize() uint64 {
-	// We arbitrarily choose 4GB.
 	memorySize := uint64(4 * 1024 * 1024 * 1024)
 	maxAllowed := vz.VirtualMachineConfigurationMaximumAllowedMemorySize()
 	if memorySize > maxAllowed {
@@ -279,27 +685,19 @@ func createSpiceAgentConsoleDeviceConfiguration() (*vz.VirtioConsoleDeviceConfig
 	return consoleDevice, nil
 }
 
-func getMachineIdentifier(needsInstall bool) (*vz.GenericMachineIdentifier, error) {
-	path := GetMachineIdentifierPath()
+// createVirtualMachineConfig creates a VM config using the specified bundle
+func createVirtualMachineConfig(installerISOPath string, needsInstall bool, bundle *Bundle) (*vz.VirtualMachineConfiguration, error) {
+	var machineIdentifier *vz.GenericMachineIdentifier
+	var err error
 	if needsInstall {
-		return createAndSaveMachineIdentifier(path)
+		machineIdentifier, err = createAndSaveMachineIdentifier(bundle.MachineIdentifierPath())
+	} else {
+		machineIdentifier, err = vz.NewGenericMachineIdentifierWithDataPath(bundle.MachineIdentifierPath())
 	}
-	return vz.NewGenericMachineIdentifierWithDataPath(path)
-}
-
-func getEFIVariableStore(needsInstall bool) (*vz.EFIVariableStore, error) {
-	path := GetEFIVariableStorePath()
-	if needsInstall {
-		return createEFIVariableStore(path)
-	}
-	return vz.NewEFIVariableStore(path)
-}
-
-func createVirtualMachineConfig(installerISOPath string, needsInstall bool) (*vz.VirtualMachineConfiguration, error) {
-	machineIdentifier, err := getMachineIdentifier(needsInstall)
 	if err != nil {
 		return nil, err
 	}
+
 	platformConfig, err := vz.NewGenericPlatformConfiguration(
 		vz.WithGenericMachineIdentifier(machineIdentifier),
 	)
@@ -307,7 +705,12 @@ func createVirtualMachineConfig(installerISOPath string, needsInstall bool) (*vz
 		return nil, fmt.Errorf("failed to create a new platform config: %w", err)
 	}
 
-	efiVariableStore, err := getEFIVariableStore(needsInstall)
+	var efiVariableStore *vz.EFIVariableStore
+	if needsInstall {
+		efiVariableStore, err = createEFIVariableStore(bundle.EFIVariableStorePath())
+	} else {
+		efiVariableStore, err = vz.NewEFIVariableStore(bundle.EFIVariableStorePath())
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -349,13 +752,12 @@ func createVirtualMachineConfig(installerISOPath string, needsInstall bool) (*vz
 	})
 
 	// Set storage device
-	mainDiskPath := GetMainDiskImagePath()
 	if needsInstall {
-		if err := createMainDiskImage(mainDiskPath); err != nil {
+		if err := createMainDiskImage(bundle.DiskImagePath()); err != nil {
 			return nil, fmt.Errorf("failed to create a main disk image: %w", err)
 		}
 	}
-	mainDisk, err := createBlockDeviceConfiguration(mainDiskPath)
+	mainDisk, err := createBlockDeviceConfiguration(bundle.DiskImagePath())
 	if err != nil {
 		return nil, err
 	}

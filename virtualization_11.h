@@ -15,7 +15,6 @@ void changeStateOnObserver(int state, uintptr_t cgoHandle);
 bool shouldAcceptNewConnectionHandler(uintptr_t cgoHandle, void *connection, void *socketDevice);
 void emitAttachmentWasDisconnected(int index, void *err, uintptr_t cgoHandle);
 void closeAttachmentWasDisconnectedChannel(uintptr_t cgoHandle);
-void notifyWindowClosed(uintptr_t cgoHandle);
 
 @interface Observer : NSObject
 - (void)observeValueForKeyPath:(NSString *)keyPath ofObject:(id)object change:(NSDictionary *)change context:(void *)context;
